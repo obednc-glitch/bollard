@@ -3,7 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bollard</title>
+<title>Bollard - your treasury</title>
+<script type="importmap">
+{ "imports": {
+  "viem": "https://esm.sh/viem",
+  "viem/chains": "https://esm.sh/viem/chains",
+  "@metamask/smart-accounts-kit": "https://esm.sh/@metamask/smart-accounts-kit",
+  "@metamask/smart-accounts-kit/contracts": "https://esm.sh/@metamask/smart-accounts-kit/contracts"
+} }
+</script>
 <style>
   :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --text:#e6e9ef; --dim:#8b93a1; --ok:#3ecf8e; --bad:#ff5c5c; --warn:#f5b84b; }
   * { box-sizing: border-box; }
@@ -12,87 +20,244 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
   .row { display:flex; justify-content:space-between; gap:12px; padding:4px 0; flex-wrap:wrap; }
   .dim { color:var(--dim); } .mono { font-family:monospace; font-size:12px; word-break:break-all; }
+  button { background:#2b6df6; color:#fff; border:0; border-radius:8px; padding:10px 14px; font-size:14px; margin:4px 6px 4px 0; }
+  button[disabled] { opacity:.5; }
+  a { color:#7aa7ff; } #msg { color:var(--warn); min-height:20px; margin-top:6px; word-break:break-word; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
   .badge { padding:2px 10px; border-radius:99px; font-weight:600; font-size:13px; }
   .ACTIVE,.PAID { background:#12372a; color:var(--ok); } .BLOCKED,.REVOKED,.EXPIRED { background:#3a1a1a; color:var(--bad); } .ERROR { background:#3a2d12; color:var(--warn); }
-  button { background:#2b6df6; color:#fff; border:0; border-radius:8px; padding:10px 14px; font-size:14px; margin:4px 6px 4px 0; }
-  button.kill { background:var(--bad); } input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px; width:100%; margin-bottom:8px; }
-  .feed .item { border-top:1px solid var(--line); padding:8px 0; } .feed .item:first-child { border-top:0; }
-  a { color:#7aa7ff; } #msg { color:var(--warn); min-height:20px; }
+  select, input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px; margin:0 6px 8px 0; font-size:14px; }
+  input.s { width:90px; } input.w { width:100%; }
+  .item { border-top:1px solid var(--line); padding:8px 0; }
 </style>
 </head>
 <body>
 <h1>Bollard</h1>
-<p class="sub">An AI agent spends from a treasury with hard onchain limits. Monad testnet.</p>
+<p class="sub">Your own treasury. Your wallet owns it, the agent never holds your funds. Monad testnet.</p>
 
 <div class="card">
-  <div class="row"><b>Policy</b><span id="status" class="badge">...</span></div>
-  <div class="row"><span class="dim">Total cap</span><span id="cap"></span></div>
-  <div class="row"><span class="dim">Approved vendor</span><span id="vendor" class="mono"></span></div>
-  <div class="row"><span class="dim">Expires</span><span id="exp"></span></div>
-  <div class="row"><span class="dim">Treasury balance</span><span id="bal"></span></div>
-</div>
-
-<div class="card">
-  <b>Try it</b>
-  <p class="dim" id="demoinfo" style="margin:4px 0 8px"></p>
-  <button onclick="pub('/api/demo/run')">Run demo agent</button>
-  <button class="kill" onclick="pub('/api/demo/kill')">Revoke and test</button>
-  <div id="pmsg" style="color:var(--warn);min-height:20px"></div>
-</div>
-
-<details class="card"><summary>Owner controls</summary>
-  <input id="token" type="password" placeholder="Admin token (owner only)" style="margin-top:10px">
-  <button onclick="act('/api/agent/run')">Run agent</button>
-  <button onclick="newPolicy()">New policy</button>
-  <button class="kill" onclick="if(confirm('Revoke the agent?')) act('/api/kill')">Kill switch</button>
-  <button onclick="if(confirm('Clear the activity log?')) act('/api/log/clear')">Clear log</button>
+  <button id="connect">Connect wallet</button>
   <div id="msg"></div>
-</details>
+  <pre id="libs" class="dim mono" style="white-space:pre-wrap;margin:8px 0 0"></pre>
+</div>
 
-<div class="card feed"><b>Activity</b><div id="feed"></div></div>
+<div class="card" id="acct" style="display:none">
+  <div class="row"><b>Your wallet</b><span class="mono" id="wallet"></span></div>
+  <div class="row"><span class="dim">Wallet balance</span><span id="wbal"></span></div>
+</div>
 
-<script>
-const EXPLORER = "https://testnet.monadvision.com/tx/";
+<div class="card" id="tre" style="display:none">
+  <div class="row"><b>Your treasury</b><span id="state"></span></div>
+  <div class="mono" id="taddr"></div>
+  <div class="row"><span class="dim">Treasury balance</span><span id="tbal"></span></div>
+  <button id="deploy">Deploy treasury</button>
+  <button id="refresh">Refresh</button>
+  <button id="copy">Copy treasury address</button>
+  <p class="dim" style="font-size:13px;margin:8px 0 0">Fund the treasury by sending testnet MON or test USDC to its address. Testnet only: never send real funds. Faucets: <a href="https://faucet.monad.xyz" target="_blank">MON</a> &middot; <a href="https://faucet.circle.com" target="_blank">USDC</a></p>
+</div>
+
+<div class="card" id="pol" style="display:none">
+  <b>Policy for your agent</b>
+  <p class="dim" style="margin:4px 0 8px;font-size:13px">The agent can spend only within these limits. You sign it in your wallet; the server never holds your funds.</p>
+  <select id="asset"><option value="MON">MON</option><option value="USDC">USDC</option></select>
+  <input id="cap" class="s" type="number" step="0.001" value="0.01" aria-label="Cap">
+  <input id="mins" class="s" type="number" value="60" aria-label="Minutes">
+  <input id="vendor" class="w" placeholder="Approved vendor address">
+  <button id="sign">Sign and create policy</button>
+  <div id="pstate" style="margin-top:6px"></div>
+</div>
+
+<div class="card" id="agent" style="display:none">
+  <b>Agent</b>
+  <p class="dim" style="margin:4px 0 8px;font-size:13px">The demo agent tries five purchases against your policy. Your treasury needs at least 0.05 of the policy's asset.</p>
+  <button id="run">Run agent</button>
+  <button id="revoke" style="background:var(--bad)">Revoke policy</button>
+  <div id="feed"></div>
+</div>
+
+<div class="card" id="wd" style="display:none">
+  <b>Withdraw</b>
+  <p class="dim" style="margin:4px 0 8px;font-size:13px">Take funds back out of your treasury at any time.</p>
+  <select id="wdasset"><option value="MON">MON</option><option value="USDC">USDC</option></select>
+  <input id="wdamt" class="s" type="number" step="0.001" value="0.1" aria-label="Amount">
+  <input id="wdto" class="w" placeholder="Send to (your wallet by default)">
+  <button id="wdbtn">Withdraw</button>
+</div>
+
+<script type="module">
 const $ = (id) => document.getElementById(id);
-$("token").value = sessionStorage.getItem("tok") || "";
+const say = (t) => { $("msg").textContent = t; };
+window.addEventListener("unhandledrejection", (e) => say("Error: " + (e.reason?.shortMessage || e.reason?.message || e.reason)));
+window.addEventListener("error", (e) => say("Error: " + e.message));
 
-async function act(path, body) {
-  sessionStorage.setItem("tok", $("token").value);
-  $("msg").textContent = "Working...";
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "x-admin-token": $("token").value }, body: JSON.stringify(body || {}) });
+const USDC = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
+const ERC20 = [{ type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] }];
+const EXPLORER = "https://testnet.monadvision.com/tx/";
+
+let viem, kit, chains, publicClient, walletClient, treasury, address;
+
+// Load each library separately, with fallbacks, and show exactly what worked
+const LIBS = {
+  viem: ["https://esm.sh/viem", "https://cdn.jsdelivr.net/npm/viem/+esm"],
+  chains: ["https://esm.sh/viem/chains", "https://cdn.jsdelivr.net/npm/viem/chains/+esm"],
+  kit: ["https://esm.sh/@metamask/smart-accounts-kit", "https://esm.sh/@metamask/smart-accounts-kit?external=viem", "https://cdn.jsdelivr.net/npm/@metamask/smart-accounts-kit/+esm"],
+};
+const mods = {}, lines = [];
+$("libs").textContent = "Loading libraries...";
+for (const [name, urls] of Object.entries(LIBS)) {
+  const errs = [];
+  for (const u of urls) {
+    try { mods[name] = await import(u); lines.push("OK     " + name + " (" + new URL(u).host + ")"); break; }
+    catch (e) { errs.push(new URL(u).host + ": " + (e.message || e)); }
+  }
+  if (!mods[name]) lines.push("FAILED " + name + " | " + errs.join(" | "));
+  $("libs").textContent = lines.join("\n");
+}
+({ viem, chains, kit } = mods);
+
+async function ensureChain(eth) {
+  const c = chains.monadTestnet, hex = "0x" + c.id.toString(16);
+  try { await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] }); }
+  catch (err) {
+    await eth.request({ method: "wallet_addEthereumChain", params: [{
+      chainId: hex, chainName: c.name, nativeCurrency: c.nativeCurrency,
+      rpcUrls: [c.rpcUrls.default.http[0]], blockExplorerUrls: ["https://testnet.monadvision.com"],
+    }] });
+  }
+}
+
+async function balances(addr) {
+  const mon = await publicClient.getBalance({ address: addr });
+  const usdc = await publicClient.readContract({ address: USDC, abi: ERC20, functionName: "balanceOf", args: [addr] });
+  return Number(viem.formatEther(mon)).toFixed(3) + " MON \u00b7 " + Number(viem.formatUnits(usdc, 6)).toFixed(2) + " USDC";
+}
+
+async function refresh() {
+  $("wallet").textContent = address;
+  $("wbal").textContent = await balances(address);
+  $("taddr").textContent = treasury.address;
+  $("tbal").textContent = await balances(treasury.address);
+  const code = await publicClient.getCode({ address: treasury.address });
+  const deployed = !!code && code !== "0x";
+  $("state").innerHTML = deployed ? '<span class="ok">Deployed</span>' : '<span class="bad">Not deployed yet</span>';
+  $("deploy").disabled = deployed;
+  $("acct").style.display = $("tre").style.display = "block";
+}
+
+$("connect").onclick = async () => {
+  const eth = window.ethereum;
+  if (!eth) return say("No wallet found. Open this page in a browser with a wallet, such as Brave Wallet or MetaMask.");
+  if (!viem || !chains || !kit) return say("The libraries did not load. See the list above.");
+  say("Connecting...");
+  [address] = await eth.request({ method: "eth_requestAccounts" });
+  await ensureChain(eth);
+  const chain = chains.monadTestnet;
+  publicClient = viem.createPublicClient({ chain, transport: viem.http() });
+  walletClient = viem.createWalletClient({ account: address, chain, transport: viem.custom(eth) });
+  treasury = await kit.toMetaMaskSmartAccount({
+    client: publicClient, implementation: kit.Implementation.Hybrid,
+    deployParams: [address, [], [], []], deploySalt: "0x", signer: { walletClient },
+  });
+  await refresh();
+  $("connect").textContent = "Connected";
+  await initAgent();
+  say("");
+  eth.on?.("accountsChanged", () => location.reload());
+};
+
+$("refresh").onclick = async () => { say("Refreshing..."); await refresh(); say(""); };
+$("copy").onclick = () => { navigator.clipboard.writeText(treasury.address); say("Treasury address copied"); };
+$("deploy").onclick = async () => {
+  say("Confirm the transaction in your wallet...");
+  const { factory, factoryData } = await treasury.getFactoryArgs();
+  const hash = await walletClient.sendTransaction({ to: factory, data: factoryData });
+  say("Deploying...");
+  await publicClient.waitForTransactionReceipt({ hash });
+  await refresh();
+  $("msg").innerHTML = 'Treasury deployed. <a target="_blank" href="' + EXPLORER + hash + '">View transaction</a>';
+};
+
+// ---- agent, policy, revoke, withdraw ----
+let core, ctx, myPolicy = null, poll = null;
+const ADDR = /^0x[0-9a-fA-F]{40}$/;
+const JSONH = { "Content-Type": "application/json" };
+
+async function initAgent() {
+  say("Loading Bollard core...");
+  const probe = await fetch("./bollard-core.js");
+  if (!probe.ok) throw new Error("bollard-core.js is missing on the server (" + probe.status + ")");
+  try { core = await import("./bollard-core.js"); }
+  catch (e) {
+    const bad = [];
+    for (const spec of ["viem", "viem/chains", "@metamask/smart-accounts-kit", "@metamask/smart-accounts-kit/contracts"]) {
+      try { await import(spec); } catch (err) { bad.push(spec + ": " + (err.message || err)); }
+    }
+    throw new Error("Could not load the Bollard core. " + (bad.length ? "Failed imports: " + bad.join(" | ") : "All dependencies load, so the core file itself has a problem: " + (e.message || e)));
+  }
+  ctx = { net: { chain: chains.monadTestnet, usdc: USDC }, publicClient };
+  const cfg = await (await fetch("/api/config")).json();
+  if (!$("vendor").value) $("vendor").value = cfg.vendor;
+  $("wdto").value = address;
+  ["pol", "agent", "wd"].forEach((id) => { $(id).style.display = "block"; });
+  say("");
+  await loadAgentState();
+  clearInterval(poll);
+  poll = setInterval(loadAgentState, 3000);
+}
+
+async function loadAgentState() {
+  const s = await (await fetch("/api/u/" + treasury.address)).json();
+  if (!s.exists) { $("pstate").textContent = "No policy yet."; $("feed").innerHTML = ""; return; }
+  myPolicy = { delegation: s.delegation, asset: s.asset, cap: s.cap, expires: s.expires, revoked: s.revoked };
+  $("pstate").innerHTML = '<span class="badge ' + s.status + '">' + s.status + "</span> " + s.cap + " " + s.asset +
+    " cap, expires " + new Date(s.expires * 1000).toLocaleTimeString() + (s.busy ? " - agent running..." : "");
+  $("feed").innerHTML = s.log.map((e) =>
+    '<div class="item"><span class="badge ' + e.status + '">' + e.status + "</span> " +
+    (e.amount !== "-" ? e.amount + " " + e.asset + " to " + e.vendor : "") +
+    '<div class="dim">' + (e.why ? '<b style="color:var(--bad)">' + e.why + "</b> &middot; " : "") + (e.note || "") + "</div>" +
+    (e.hash ? '<a class="mono" target="_blank" href="' + EXPLORER + e.hash + '">' + e.hash.slice(0, 18) + "...</a>" : "") + "</div>").join("");
+}
+
+$("sign").onclick = async () => {
+  const vendor = $("vendor").value.trim();
+  if (!ADDR.test(vendor)) return say("Enter a valid vendor address");
+  const cap = Number($("cap").value), mins = Number($("mins").value);
+  if (!(cap > 0) || !(mins >= 1 && mins <= 1440)) return say("Check the cap and the minutes");
+  const cfg = await (await fetch("/api/config")).json();
+  say("Sign the policy in your wallet...");
+  const policy = await core.createPolicy(ctx, treasury, { agent: cfg.agent, vendor, asset: $("asset").value, cap: String(cap), ttlSeconds: mins * 60 });
+  const r = await fetch("/api/u/policy", { method: "POST", headers: JSONH, body: JSON.stringify({
+    treasury: treasury.address, delegation: policy.delegation, asset: policy.asset, cap: policy.cap, expires: policy.expires, vendor,
+  }) });
   const j = await r.json();
-  $("msg").textContent = r.ok ? "" : (j.error || "Failed");
-  load();
-}
-async function pub(path) {
-  $("pmsg").textContent = "Working... this can take up to a minute";
-  const r = await fetch(path, { method: "POST" });
+  say(r.ok ? "Policy created. Press Run agent." : (j.error || "Failed"));
+  await loadAgentState();
+};
+
+$("run").onclick = async () => {
+  const r = await fetch("/api/u/run", { method: "POST", headers: JSONH, body: JSON.stringify({ treasury: treasury.address }) });
   const j = await r.json();
-  $("pmsg").textContent = r.ok ? "" : (j.error || "Failed");
-  load();
-}
-function newPolicy() {
-  const asset = (prompt("Asset: MON or USDC", "USDC") || "").toUpperCase(); if (!asset) return;
-  const cap = prompt("Total cap in " + asset, "0.01"); if (!cap) return;
-  const minutes = prompt("Valid for how many minutes", "120"); if (!minutes) return;
-  act("/api/policy", { cap, minutes, asset });
-}
-async function load() {
-  const s = await (await fetch("/api/state")).json();
-  $("status").textContent = s.status; $("status").className = "badge " + s.status;
-  $("cap").textContent = s.cap + " " + s.asset;
-  $("vendor").textContent = Object.entries(s.allowed).map(([n, a]) => n + " " + a.slice(0, 8) + "...").join(", ");
-  $("exp").textContent = new Date(s.expires * 1000).toLocaleString();
-  $("bal").textContent = s.asset === "USDC" ? Number(s.treasuryUsdc).toFixed(4) + " USDC" : Number(s.treasuryBalance).toFixed(4) + " MON";
-  $("demoinfo").textContent = s.demoLeft + " demo runs left today" + (s.cooldown ? " - next run in " + Math.ceil(s.cooldown / 1000) + "s" : "") + (s.running ? " - agent running..." : "");
-  $("feed").innerHTML = s.log.length ? s.log.map((e) =>
-    '<div class="item"><span class="badge ' + e.status + '">' + e.status + '</span> ' +
-    (e.amount !== "-" ? e.amount + " " + (e.asset || "MON") + " to " + e.vendor : "") +
-    '<div class="dim">' + (e.why ? '<b style="color:var(--bad)">' + e.why + '</b> &middot; ' : "") + (e.note || "") + '</div>' +
-    (e.hash ? '<a class="mono" target="_blank" href="' + EXPLORER + e.hash + '">' + e.hash.slice(0, 18) + '...</a>' : "") +
-    '</div>').join("") : '<p class="dim">No activity yet. Run the agent.</p>';
-}
-load(); setInterval(load, 3000);
+  say(r.ok ? "" : (j.error || "Failed"));
+  await loadAgentState();
+};
+
+$("revoke").onclick = async () => {
+  if (!myPolicy) return say("No policy to revoke");
+  say("Sign and confirm the revoke in your wallet (two prompts)...");
+  const hash = await core.revoke(ctx, treasury, myPolicy, walletClient);
+  await fetch("/api/u/revoked", { method: "POST", headers: JSONH, body: JSON.stringify({ treasury: treasury.address, hash }) });
+  say("Policy revoked.");
+  await loadAgentState();
+};
+
+$("wdbtn").onclick = async () => {
+  const to = $("wdto").value.trim() || address;
+  if (!ADDR.test(to)) return say("Enter a valid address");
+  say("Sign and confirm the withdrawal in your wallet (two prompts)...");
+  const hash = await core.withdraw(ctx, treasury, walletClient, { asset: $("wdasset").value, amount: $("wdamt").value, to });
+  await refresh();
+  $("msg").innerHTML = 'Withdrawn. <a target="_blank" href="' + EXPLORER + hash + '">View transaction</a>';
+};
 </script>
 </body>
 </html>
