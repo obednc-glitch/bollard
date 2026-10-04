@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bollard</title>
+<style>
+  :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --text:#e6e9ef; --dim:#8b93a1; --ok:#3ecf8e; --bad:#ff5c5c; --warn:#f5b84b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; padding:16px; max-width:760px; margin:auto; }
+  h1 { font-size:20px; margin:4px 0 2px; } .sub { color:var(--dim); margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:4px 0; flex-wrap:wrap; }
+  .dim { color:var(--dim); } .mono { font-family:monospace; font-size:12px; word-break:break-all; }
+  .badge { padding:2px 10px; border-radius:99px; font-weight:600; font-size:13px; }
+  .ACTIVE,.PAID { background:#12372a; color:var(--ok); } .BLOCKED,.REVOKED,.EXPIRED { background:#3a1a1a; color:var(--bad); } .ERROR { background:#3a2d12; color:var(--warn); }
+  button { background:#2b6df6; color:#fff; border:0; border-radius:8px; padding:10px 14px; font-size:14px; margin:4px 6px 4px 0; }
+  button.kill { background:var(--bad); } input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px; width:100%; margin-bottom:8px; }
+  .feed .item { border-top:1px solid var(--line); padding:8px 0; } .feed .item:first-child { border-top:0; }
+  a { color:#7aa7ff; } #msg { color:var(--warn); min-height:20px; }
+</style>
+</head>
+<body>
+<h1>Bollard</h1>
+<p class="sub">An AI agent spends from a treasury with hard onchain limits. Monad testnet.</p>
+
+<div class="card">
+  <div class="row"><b>Policy</b><span id="status" class="badge">...</span></div>
+  <div class="row"><span class="dim">Total cap</span><span id="cap"></span></div>
+  <div class="row"><span class="dim">Approved vendor</span><span id="vendor" class="mono"></span></div>
+  <div class="row"><span class="dim">Expires</span><span id="exp"></span></div>
+  <div class="row"><span class="dim">Treasury balance</span><span id="bal"></span></div>
+</div>
+
+<div class="card">
+  <b>Try it</b>
+  <p class="dim" id="demoinfo" style="margin:4px 0 8px"></p>
+  <button onclick="pub('/api/demo/run')">Run demo agent</button>
+  <button class="kill" onclick="pub('/api/demo/kill')">Revoke and test</button>
+  <div id="pmsg" style="color:var(--warn);min-height:20px"></div>
+</div>
+
+<details class="card"><summary>Owner controls</summary>
+  <input id="token" type="password" placeholder="Admin token (owner only)" style="margin-top:10px">
+  <button onclick="act('/api/agent/run')">Run agent</button>
+  <button onclick="newPolicy()">New policy</button>
+  <button class="kill" onclick="if(confirm('Revoke the agent?')) act('/api/kill')">Kill switch</button>
+  <button onclick="if(confirm('Clear the activity log?')) act('/api/log/clear')">Clear log</button>
+  <div id="msg"></div>
+</details>
+
+<div class="card feed"><b>Activity</b><div id="feed"></div></div>
+
+<script>
+const EXPLORER = "https://testnet.monadvision.com/tx/";
+const $ = (id) => document.getElementById(id);
+$("token").value = sessionStorage.getItem("tok") || "";
+
+async function act(path, body) {
+  sessionStorage.setItem("tok", $("token").value);
+  $("msg").textContent = "Working...";
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "x-admin-token": $("token").value }, body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  $("msg").textContent = r.ok ? "" : (j.error || "Failed");
+  load();
+}
+async function pub(path) {
+  $("pmsg").textContent = "Working... this can take up to a minute";
+  const r = await fetch(path, { method: "POST" });
+  const j = await r.json();
+  $("pmsg").textContent = r.ok ? "" : (j.error || "Failed");
+  load();
+}
+function newPolicy() {
+  const asset = (prompt("Asset: MON or USDC", "USDC") || "").toUpperCase(); if (!asset) return;
+  const cap = prompt("Total cap in " + asset, "0.01"); if (!cap) return;
+  const minutes = prompt("Valid for how many minutes", "120"); if (!minutes) return;
+  act("/api/policy", { cap, minutes, asset });
+}
+async function load() {
+  const s = await (await fetch("/api/state")).json();
+  $("status").textContent = s.status; $("status").className = "badge " + s.status;
+  $("cap").textContent = s.cap + " " + s.asset;
+  $("vendor").textContent = Object.entries(s.allowed).map(([n, a]) => n + " " + a.slice(0, 8) + "...").join(", ");
+  $("exp").textContent = new Date(s.expires * 1000).toLocaleString();
+  $("bal").textContent = s.asset === "USDC" ? Number(s.treasuryUsdc).toFixed(4) + " USDC" : Number(s.treasuryBalance).toFixed(4) + " MON";
+  $("demoinfo").textContent = s.demoLeft + " demo runs left today" + (s.cooldown ? " - next run in " + Math.ceil(s.cooldown / 1000) + "s" : "") + (s.running ? " - agent running..." : "");
+  $("feed").innerHTML = s.log.length ? s.log.map((e) =>
+    '<div class="item"><span class="badge ' + e.status + '">' + e.status + '</span> ' +
+    (e.amount !== "-" ? e.amount + " " + (e.asset || "MON") + " to " + e.vendor : "") +
+    '<div class="dim">' + (e.why ? '<b style="color:var(--bad)">' + e.why + '</b> &middot; ' : "") + (e.note || "") + '</div>' +
+    (e.hash ? '<a class="mono" target="_blank" href="' + EXPLORER + e.hash + '">' + e.hash.slice(0, 18) + '...</a>' : "") +
+    '</div>').join("") : '<p class="dim">No activity yet. Run the agent.</p>';
+}
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>
