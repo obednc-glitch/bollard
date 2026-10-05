@@ -115,7 +115,7 @@ for (const [name, urls] of Object.entries(LIBS)) {
   if (!mods[name]) lines.push("FAILED " + name + " | " + errs.join(" | "));
   $("libs").textContent = lines.join("\n");
 }
-&
+({ viem, chains, kit } = mods);
 if (viem && chains && kit) $("libs").textContent = "";
 
 async function ensureChain(eth) {
