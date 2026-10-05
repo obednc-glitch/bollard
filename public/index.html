@@ -30,7 +30,7 @@
   select, input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px; margin:0 6px 8px 0; font-size:14px; }
   input.s { width:90px; } input.w { width:100%; }
   .item { border-top:1px solid var(--line); padding:8px 0; }
-.brand{text-align:center;margin:10px 0 20px}.brand img{display:block;margin:0 auto 12px;border-radius:26px}.brand h1{font-size:30px;margin:0;color:#2f6bff}
+.brand{text-align:center;margin:10px 0 20px}.brand img{display:block;margin:0 auto 12px;border-radius:26px}.brand h1{font-size:30px;margin:0;color:#e8ecf5}.brand h1::after{content:"";display:block;width:56px;height:5px;border-radius:3px;background:#2f6bff;margin:10px auto 0}
 </style>
 </head>
 <body>
@@ -115,7 +115,8 @@ for (const [name, urls] of Object.entries(LIBS)) {
   if (!mods[name]) lines.push("FAILED " + name + " | " + errs.join(" | "));
   $("libs").textContent = lines.join("\n");
 }
-({ viem, chains, kit } = mods);
+&
+if (viem && chains && kit) $("libs").textContent = "";
 
 async function ensureChain(eth) {
   const c = chains.monadTestnet, hex = "0x" + c.id.toString(16);
