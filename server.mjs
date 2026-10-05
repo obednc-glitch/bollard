@@ -63,7 +63,7 @@ async function makePolicy(cap, ttlMin, asset = "MON") {
 
 function why(reason) {
   if (!reason) return "Rejected by policy";
-  if (/allowance-exceeded/i.test(reason)) return "Over the spending cap";
+  if (/allowance-exceeded/i.test(reason)) return "Would exceed the total budget";
   if (/target-address-not-allowed|AllowedTargets|invalid-calldata|AllowedCalldata/i.test(reason)) return "Vendor is not on the approved list";
   if (/disabled/i.test(reason)) return "Policy was revoked by the owner";
   if (/expired|Timestamp/i.test(reason)) return "Policy has expired";

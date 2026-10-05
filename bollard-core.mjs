@@ -117,7 +117,7 @@ async function selfDelegation(treasury, ownerAddress, scope) {
 
 export function explain(reason, state = {}) {
   if (reason && !/unknown reason/i.test(reason)) {
-    if (/allowance-exceeded/i.test(reason)) return "Over the spending cap";
+    if (/allowance-exceeded/i.test(reason)) return "Would exceed the total budget";
     if (/target-address-not-allowed|AllowedTargets|invalid-calldata|AllowedCalldata/i.test(reason)) return "Vendor is not on the approved list";
     if (/disabled/i.test(reason)) return "Policy was revoked by the owner";
     if (/expired|Timestamp/i.test(reason)) return "Policy has expired";
