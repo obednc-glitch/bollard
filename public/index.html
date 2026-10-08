@@ -55,7 +55,7 @@
   <button id="deploy">Deploy treasury</button>
   <button id="refresh">Refresh</button>
   <button id="copy">Copy treasury address</button>
-  <p class="dim" style="font-size:13px;margin:8px 0 0">Fund the treasury by sending testnet MON or test USDC to its address. Testnet only: never send real funds. Faucets: <a href="https://faucet.monad.xyz" target="_blank">MON</a> &middot; <a href="https://faucet.circle.com" target="_blank">USDC</a></p>
+  <p id="fundnote" class="dim" style="font-size:13px;margin:8px 0 0">Fund the treasury by sending testnet MON or test USDC to its address. Testnet only: never send real funds. Faucets: <a href="https://faucet.monad.xyz" target="_blank">MON</a> &middot; <a href="https://faucet.circle.com" target="_blank">USDC</a></p>
 </div>
 
 <div class="card" id="pol" style="display:none">
@@ -92,9 +92,15 @@ const say = (t) => { $("msg").textContent = t; };
 window.addEventListener("unhandledrejection", (e) => say("Error: " + (e.reason?.shortMessage || e.reason?.message || e.reason)));
 window.addEventListener("error", (e) => say("Error: " + e.message));
 
-const USDC = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
+const NETINFO = await fetch("/api/network").then((r) => r.json()).catch(() => ({ mainnet: false }));
+const MAINNET = !!NETINFO.mainnet;
+const USDC = MAINNET ? "0x754704Bc059F8C67012fEd69BC8A327a5aafb603" : "0x534b2f3A21130d7a60830c2Df862319e593943A3";
+if (MAINNET) {
+  document.querySelector(".sub").textContent = "Your own treasury. Your wallet owns it, the agent never holds your funds. Monad mainnet: unaudited, use small amounts only.";
+  document.getElementById("fundnote").textContent = "Fund the treasury by sending MON or USDC on Monad mainnet to its address. Unaudited software: use small amounts only.";
+}
 const ERC20 = [{ type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] }];
-const EXPLORER = "https://testnet.monadvision.com/tx/";
+const EXPLORER = MAINNET ? "https://monadscan.com/tx/" : "https://testnet.monadvision.com/tx/";
 
 let viem, kit, chains, publicClient, walletClient, treasury, address;
 
@@ -119,12 +125,12 @@ for (const [name, urls] of Object.entries(LIBS)) {
 if (viem && chains && kit) $("libs").textContent = "";
 
 async function ensureChain(eth) {
-  const c = chains.monadTestnet, hex = "0x" + c.id.toString(16);
+  const c = (MAINNET ? chains.monad : chains.monadTestnet), hex = "0x" + c.id.toString(16);
   try { await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] }); }
   catch (err) {
     await eth.request({ method: "wallet_addEthereumChain", params: [{
       chainId: hex, chainName: c.name, nativeCurrency: c.nativeCurrency,
-      rpcUrls: [c.rpcUrls.default.http[0]], blockExplorerUrls: ["https://testnet.monadvision.com"],
+      rpcUrls: [c.rpcUrls.default.http[0]], blockExplorerUrls: [MAINNET ? "https://monadscan.com" : "https://testnet.monadvision.com"],
     }] });
   }
 }
@@ -154,7 +160,7 @@ $("connect").onclick = async () => {
   say("Connecting...");
   [address] = await eth.request({ method: "eth_requestAccounts" });
   await ensureChain(eth);
-  const chain = chains.monadTestnet;
+  const chain = (MAINNET ? chains.monad : chains.monadTestnet);
   publicClient = viem.createPublicClient({ chain, transport: viem.http() });
   walletClient = viem.createWalletClient({ account: address, chain, transport: viem.custom(eth) });
   treasury = await kit.toMetaMaskSmartAccount({
@@ -197,7 +203,7 @@ async function initAgent() {
     }
     throw new Error("Could not load the Bollard core. " + (bad.length ? "Failed imports: " + bad.join(" | ") : "All dependencies load, so the core file itself has a problem: " + (e.message || e)));
   }
-  ctx = { net: { chain: chains.monadTestnet, usdc: USDC }, publicClient };
+  ctx = { net: { chain: (MAINNET ? chains.monad : chains.monadTestnet), usdc: USDC }, publicClient };
   const cfg = await (await fetch("/api/config")).json();
   if (!$("vendor").value) $("vendor").value = cfg.vendor;
   $("wdto").value = address;

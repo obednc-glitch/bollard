@@ -2,7 +2,7 @@ import fs from "node:fs";
 import express from "express";
 import { createPublicClient, createWalletClient, http, parseEther, formatEther, parseUnits, formatUnits, pad, encodeFunctionData, numberToHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { monadTestnet } from "viem/chains";
+import { monadTestnet, monad } from "viem/chains";
 import { Implementation, toMetaMaskSmartAccount, createDelegation, createExecution, ExecutionMode } from "@metamask/smart-accounts-kit";
 import { DelegationManager } from "@metamask/smart-accounts-kit/contracts";
 import * as B from "./bollard-core.mjs";
@@ -16,15 +16,18 @@ const vendors = {
   "ShadyAPI": process.env.VENDOR_B || privateKeyToAccount(k.vendor2).address,
 };
 const ADMIN = process.env.ADMIN_TOKEN;
-const USDC = "0x534b2f3A21130d7a60830c2Df862319e593943A3"; // Circle USDC on Monad testnet (6 decimals)
+const IS_MAINNET = process.env.NETWORK === "mainnet";
+const NET_CHAIN = IS_MAINNET ? monad : monadTestnet;
+const USDC = IS_MAINNET ? "0x754704Bc059F8C67012fEd69BC8A327a5aafb603" : "0x534b2f3A21130d7a60830c2Df862319e593943A3"; // Circle USDC (6 decimals)
+const MAX_USDC = Number(process.env.MAX_USDC || 1), MAX_MON = Number(process.env.MAX_MON || 1), MAX_TTL = Number(process.env.MAX_TTL_HOURS || 24) * 3600;
 const ERC20 = [
   { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 if (!ADMIN) console.warn("ADMIN_TOKEN not set: admin actions are disabled");
 
-const pub = createPublicClient({ chain: monadTestnet, transport: http() });
-const mk = (account) => createWalletClient({ account, chain: monadTestnet, transport: http() });
+const pub = createPublicClient({ chain: NET_CHAIN, transport: http(process.env.RPC_URL) });
+const mk = (account) => createWalletClient({ account, chain: NET_CHAIN, transport: http(process.env.RPC_URL) });
 const ownerW = mk(owner), agentW = mk(agent);
 const treasury = await toMetaMaskSmartAccount({
   client: pub, implementation: Implementation.Hybrid,
@@ -73,8 +76,8 @@ function why(reason) {
 // Monad reserves gas by gas LIMIT, so each agent tx locks about 0.05 MON; keep the agent funded
 async function ensureGas() {
   const bal = await pub.getBalance({ address: agent.address });
-  if (bal < parseEther("0.2")) {
-    const h = await ownerW.sendTransaction({ to: agent.address, value: parseEther("0.5") });
+  if (bal < parseEther(process.env.GAS_MIN_MON || "0.2")) {
+    const h = await ownerW.sendTransaction({ to: agent.address, value: parseEther(process.env.GAS_TOPUP_MON || "0.5") });
     await pub.waitForTransactionReceipt({ hash: h });
   }
 }
@@ -168,7 +171,7 @@ async function gate(req, res, next) { // actions that cost the owner testnet gas
   if (running) return res.status(429).json({ error: "The agent is mid-run. Try again in a few seconds" });
   if (Date.now() - (lastBy.get(req.ip) || 0) < COOLDOWN) return res.status(429).json({ error: "Please wait a few seconds between actions" });
   if (day.n >= DAILY) return res.status(429).json({ error: "Daily action limit reached. Try again tomorrow" });
-  if ((await pub.getBalance({ address: owner.address })) < parseEther("1.5")) return res.status(503).json({ error: "Paused: the owner wallet is low on testnet MON" });
+  if ((await pub.getBalance({ address: owner.address })) < parseEther(process.env.OWNER_MIN_MON || "1.5")) return res.status(503).json({ error: "Paused: the owner wallet is low on MON" });
   lastBy.set(req.ip, Date.now()); day.n++;
   next();
 }
@@ -183,6 +186,7 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(express.json());
 app.use(express.static("public"));
+app.get("/api/network", (req, res) => res.json({ mainnet: IS_MAINNET }));
 
 app.get("/api/state", async (_req, res) => {
   const bal = async (a) => formatEther(await pub.getBalance({ address: a }));
@@ -228,7 +232,7 @@ app.post("/api/log/clear", (req, res) => {
 });
 
 // ---- per-user mode: each wallet owns its treasury and policy; the agent holds only a signed permission ----
-const ctxS = { net: { chain: monadTestnet, usdc: USDC }, publicClient: pub };
+const ctxS = { net: { chain: NET_CHAIN, usdc: USDC }, publicClient: pub };
 const envOnly = { environment: treasury.environment };
 const key = (a) => String(a || "").toLowerCase();
 const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
@@ -241,6 +245,12 @@ app.post("/api/u/policy", light, (req, res) => {
   const { treasury: t, delegation, asset, cap, expires, vendor } = req.body || {};
   if (!isAddr(t) || !isAddr(vendor)) return res.status(400).json({ error: "Bad address" });
   if (asset !== "MON" && asset !== "USDC") return res.status(400).json({ error: "Asset must be MON or USDC" });
+  if (IS_MAINNET) {
+    const maxCap = asset === "USDC" ? MAX_USDC : MAX_MON;
+    const ttl = Number(expires) - Math.floor(Date.now() / 1000);
+    if (!(Number(cap) > 0) || Number(cap) > maxCap) return res.status(400).json({ error: "Mainnet budget is limited to " + maxCap + " " + asset + " while unaudited" });
+    if (!(ttl > 0) || ttl > MAX_TTL + 120) return res.status(400).json({ error: "Mainnet policies are limited to " + (MAX_TTL / 3600) + " hours while unaudited" });
+  }
   if (!delegation || key(delegation.delegator) !== key(t) || key(delegation.delegate) !== key(agent.address))
     return res.status(400).json({ error: "The policy must be signed by this treasury for the demo agent" });
   S.users[key(t)] = { treasury: t, vendor, log: [], policy: { delegation, asset, cap: String(cap), expires: Number(expires), revoked: false } };
