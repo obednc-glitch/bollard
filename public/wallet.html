@@ -56,6 +56,14 @@
   <button id="refresh">Refresh</button>
   <button id="copy">Copy treasury address</button>
   <p id="fundnote" class="dim" style="font-size:13px;margin:8px 0 0">Fund the treasury by sending testnet MON or test USDC to its address. Testnet only: never send real funds. Faucets: <a href="https://faucet.monad.xyz" target="_blank">MON</a> &middot; <a href="https://faucet.circle.com" target="_blank">USDC</a></p>
+  <div id="aurora" style="display:none;margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
+    <b>Fund from another chain</b>
+    <p class="dim" style="font-size:13px;margin:6px 0 8px">Send USDC from another chain. Aurora Intents routes it to your treasury as USDC on Monad. Send only USDC on the chain you pick, and the exact amount shown.</p>
+    <select id="auchain" class="s"><option value="base">Base</option><option value="arb">Arbitrum</option><option value="eth">Ethereum</option><option value="op">Optimism</option><option value="pol">Polygon</option></select>
+    <input id="auamt" class="s" type="number" step="0.01" value="2" aria-label="USDC amount">
+    <button id="aubtn">Get deposit address</button>
+    <div id="auout" class="dim" style="font-size:13px;margin-top:8px"></div>
+  </div>
 </div>
 
 <div class="card" id="pol" style="display:none">
@@ -267,6 +275,37 @@ $("wdbtn").onclick = async () => {
   await refresh();
   $("msg").innerHTML = 'Withdrawn. <a target="_blank" href="' + EXPLORER + hash + '">View transaction</a>';
 };
+
+async function auPoll(dep, tries) {
+  const el = document.getElementById("austatus");
+  if (!el || tries > 180) return;
+  try {
+    const r = await fetch("/api/aurora/status?deposit=" + encodeURIComponent(dep) + "&wallet=" + address + "&treasury=" + treasury.address);
+    const j = await r.json();
+    el.textContent = j.status || "waiting for deposit";
+    if (j.status === "SUCCESS") { await refresh(); return; }
+    if (j.status === "REFUNDED" || j.status === "FAILED") return;
+  } catch (e) {}
+  setTimeout(() => auPoll(dep, tries + 1), 10000);
+}
+if (MAINNET) {
+  document.getElementById("aurora").style.display = "block";
+  document.getElementById("aubtn").onclick = async () => {
+    const out = document.getElementById("auout");
+    try {
+      out.textContent = "Requesting a deposit address...";
+      const chain = document.getElementById("auchain").value, amount = document.getElementById("auamt").value;
+      const r = await fetch("/api/aurora/quote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chain, amount, treasury: treasury.address, refundTo: address }) });
+      const j = await r.json();
+      if (!r.ok) { out.textContent = j.error || "Quote failed"; return; }
+      const q = j.quote || j;
+      if (!q.depositAddress) { out.textContent = "Aurora returned no deposit address"; return; }
+      const clean = (v) => String(v).replace(/[<>&"']/g, "");
+      out.innerHTML = "Send exactly " + clean(amount) + " USDC on " + clean(chain).toUpperCase() + " to:<br><span class='mono' style='word-break:break-all'>" + clean(q.depositAddress) + "</span><br>Expected on Monad: " + clean(q.amountOutFormatted || "?") + " USDC. Status: <span id='austatus'>waiting for deposit</span>";
+      auPoll(q.depositAddress, 0);
+    } catch (e) { out.textContent = "Error: " + (e.message || e); }
+  };
+}
 </script>
 </body>
 </html>

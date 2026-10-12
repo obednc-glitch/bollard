@@ -307,4 +307,51 @@ app.post("/api/u/revoked", light, (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ---- Aurora Intents: fund the treasury from another chain ----
+const AU = "https://intents-api.aurora.dev/api";
+const AU_CHAINS = ["base", "arb", "eth", "op", "pol"];
+let auTok = { t: 0, list: [] };
+async function auTokens() {
+  if (auTok.list.length && Date.now() - auTok.t < 600000) return auTok.list;
+  const r = await fetch(AU + "/tokens/" + process.env.AURORA_KEY);
+  auTok = { t: Date.now(), list: ((await r.json()).tokens) || [] };
+  return auTok.list;
+}
+app.post("/api/aurora/quote", light, async (req, res) => {
+  try {
+    if (!IS_MAINNET) return res.status(400).json({ error: "Cross-chain funding is mainnet only" });
+    if (!process.env.AURORA_KEY) return res.status(503).json({ error: "Cross-chain funding is not configured" });
+    const { chain, amount, treasury: t, refundTo } = req.body || {};
+    const n = Number(amount), max = Number(process.env.AURORA_MAX_USDC || 5);
+    if (!AU_CHAINS.includes(chain)) return res.status(400).json({ error: "Unsupported source chain" });
+    if (!isAddr(t) || !isAddr(refundTo)) return res.status(400).json({ error: "Bad address" });
+    if (!(n > 0) || n > max) return res.status(400).json({ error: "Amount must be above 0 and at most " + max + " USDC while unaudited" });
+    const list = await auTokens();
+    const src = list.find((x) => x.blockchain === chain && x.symbol === "USDC");
+    const dst = list.find((x) => x.blockchain === "monad" && x.symbol === "USDC");
+    if (!src || !dst) return res.status(502).json({ error: "Token not available" });
+    if ((dst.contractAddress || "").toLowerCase() !== USDC.toLowerCase()) return res.status(502).json({ error: "Destination USDC mismatch" });
+    const body = { dry: false, swapType: "EXACT_INPUT", slippageTolerance: 100, originAsset: src.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: dst.assetId, amount: String(Math.round(n * 1e6)), recipient: t, recipientType: "DESTINATION_CHAIN", refundTo, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 3600000).toISOString() };
+    const r = await fetch(AU + "/quote/" + process.env.AURORA_KEY, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ error: j.message || j.error || ("Aurora quote failed (" + r.status + ")") });
+    res.json(j);
+  } catch (e) { res.status(502).json({ error: "Aurora request failed" }); }
+});
+app.get("/api/aurora/status", light, async (req, res) => {
+  try {
+    if (!process.env.AURORA_KEY) return res.json({ status: "not configured" });
+    const dep = String(req.query.deposit || "");
+    for (const w of [req.query.wallet, req.query.treasury]) {
+      if (!isAddr(w)) continue;
+      const r = await fetch(AU + "/transactions/" + process.env.AURORA_KEY + "?walletAddress=" + w);
+      const j = await r.json().catch(() => ({}));
+      const hit = (j.data || []).find((x) => x.depositAddress === dep);
+      if (hit) return res.json({ status: hit.status, amountOut: hit.amountOutFormatted || null });
+    }
+    res.json({ status: "PENDING_DEPOSIT" });
+  } catch (e) { res.json({ status: "PENDING_DEPOSIT" }); }
+});
+
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard on port", process.env.PORT || 3000));
