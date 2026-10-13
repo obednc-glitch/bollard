@@ -59,6 +59,16 @@ The demo agent needs your treasury to hold at least 0.05 of the policy's asset. 
 - `bollard-core.mjs` is a small library that holds the policy and payment logic. The server and the wallet page both use it, so other projects and agents can plug it in.
 - Node.js and Express for the server, plain HTML and viem for the wallet page.
 
+## Mainnet and funding from another chain
+
+Bollard also runs on Monad mainnet at https://bollard-mainnet.onrender.com. While the code is unaudited, every mainnet policy is capped at 1 MON or 1 USDC and 24 hours.
+
+On mainnet the page has a Fund from another chain card built on the Aurora Intents Swap API. The server asks Aurora for a quote with the user's treasury as the recipient and USDC on Monad as the destination, then shows the deposit address and polls the swap status. It checks that Aurora's Monad USDC is the same contract Bollard uses (Circle's native USDC) and limits each request to 5 USDC.
+
+Status: token lookup, quotes and deposit-address generation work against Aurora's live API from the mainnet service. A completed end-to-end transfer with real funds has not been verified yet.
+
+Mainnet environment variables: NETWORK=mainnet and AURORA_KEY (not secret, but kept out of the repo), plus the keys and vendor addresses listed below.
+
 ## Run it yourself
 
 ```
@@ -76,7 +86,7 @@ Locally the server falls back to a `keys.json` file that is never committed. To 
 
 ## Limits of this version
 
-- Testnet only. The code has not been audited and should not hold real funds.
+- Unaudited. The mainnet version caps every policy and should only hold small test amounts.
 - One approved vendor per policy.
 - The demo agent is scripted. It shows the limits working but does not make decisions of its own.
 - Each agent transaction needs about 0.1 MON of gas in the agent wallet, because Monad charges gas by the gas limit.
